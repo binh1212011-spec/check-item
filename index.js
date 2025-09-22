@@ -1,75 +1,97 @@
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const express = require("express");
+const fs = require("fs");
 require("dotenv").config();
-const ITEMS = require("./items"); // load danh sách item
 
+// ==== LOAD ITEMS ====
+const items = JSON.parse(fs.readFileSync("./items.json", "utf8"));
+
+// ==== DISCORD BOT ====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
-  ]
+  ],
+  partials: [Partials.Channel],
 });
 
-const PREFIX = process.env.PREFIX || "!";
-
-// 🔹 ID roles base/level (thay bằng ID thật trong server)
-const BASE_ROLE_ID = "1415319898468651008";      // Role Level 0
-const LEVEL5_ROLE_ID = "1415350765291307028";  // Role Level 5
-
-client.on("ready", () => {
+// ==== Khi bot online ====
+client.on("clientReady", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// 1️⃣ Auto add base role khi member mới join
+// ==== Auto add role base khi member join ====
 client.on("guildMemberAdd", async (member) => {
-  const baseRole = member.guild.roles.cache.get(BASE_ROLE_ID);
-  if (baseRole) {
-    await member.roles.add(baseRole).catch(console.error);
-    console.log(`Added base role to ${member.user.tag}`);
+  const baseRoleId = process.env.BASE_ROLE_ID; // role level 0
+  if (!baseRoleId) return;
+  try {
+    await member.roles.add(baseRoleId);
+    console.log(`🎉 Added base role to ${member.user.tag}`);
+  } catch (err) {
+    console.error("❌ Error adding base role:", err);
   }
 });
 
-// 2️⃣ Auto remove base role khi member đạt Level 5
+// ==== Khi member nhận role mới → remove base role nếu cần ====
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  const baseRole = newMember.guild.roles.cache.get(BASE_ROLE_ID);
-  const level5Role = newMember.guild.roles.cache.get(LEVEL5_ROLE_ID);
+  const baseRoleId = process.env.BASE_ROLE_ID;
+  const level5RoleId = process.env.LEVEL5_ROLE_ID;
 
-  if (!baseRole || !level5Role) return;
+  if (!baseRoleId || !level5RoleId) return;
 
-  if (!oldMember.roles.cache.has(level5Role.id) && newMember.roles.cache.has(level5Role.id)) {
-    await newMember.roles.remove(baseRole).catch(console.error);
-    console.log(`Removed base role from ${newMember.user.tag}`);
+  if (!oldMember.roles.cache.has(level5RoleId) && newMember.roles.cache.has(level5RoleId)) {
+    try {
+      await newMember.roles.remove(baseRoleId);
+      console.log(`⚡ Removed base role from ${newMember.user.tag}`);
+    } catch (err) {
+      console.error("❌ Error removing base role:", err);
+    }
   }
 });
 
-// 3️⃣ Command !equip để equip item Tatsu dựa trên role
+// ==== Lệnh !equip <itemName> ====
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith(PREFIX)) return;
+  if (!message.content.startsWith("!equip") || message.author.bot) return;
 
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+  const args = message.content.split(" ").slice(1);
+  const itemName = args.join(" ");
+  if (!itemName) {
+    return message.reply("❌ Bạn phải nhập tên item. Ví dụ: `!equip Magic Sword`");
+  }
 
-  if (command === "equip") {
-    const itemName = args.join(" ");
-    if (!itemName) return message.reply("⚠️ Bạn cần nhập tên item muốn equip.");
+  const item = items.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+  if (!item) {
+    return message.reply("❌ Item này không tồn tại trong danh sách.");
+  }
 
-    const item = ITEMS[itemName];
-    if (!item) {
-      return message.reply("❌ Item này chưa được cấu hình trong bot.");
-    }
+  // Check role
+  if (!message.member.roles.cache.has(item.requiredRole)) {
+    return message.reply("🚫 Bạn chưa đủ role để equip item này.");
+  }
 
-    const member = message.member;
-
-    if (!member.roles.cache.has(item.roleId)) {
-      return message.reply("🚫 Bạn chưa sở hữu role cần thiết để equip item này.");
-    }
-
-    // ✅ Gửi lệnh Tatsu để equip item
-    message.channel.send(`t!give ${member} "${itemName}"`);
-    message.reply(`🎉 Đã equip item **${itemName}** thành công!\n✨ Effect: ${item.effect}`);
+  // Nếu đủ role → gửi command Tatsu
+  try {
+    await message.channel.send(`t!give <@${message.author.id}> "${item.name}"`);
+    return message.reply(`✅ Đã equip item **${item.name}** cho bạn!`);
+  } catch (err) {
+    console.error("❌ Error equip item:", err);
+    return message.reply("❌ Có lỗi xảy ra khi equip item.");
   }
 });
 
+// ==== EXPRESS SERVER KEEP-ALIVE ====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Bot is alive!");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌍 Web server running on port ${PORT}`);
+});
+
+// ==== LOGIN DISCORD ====
 client.login(process.env.TOKEN);
