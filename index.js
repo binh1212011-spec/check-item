@@ -2,83 +2,85 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 require("dotenv").config();
 
+const items = require("./items");
+
+// Bot client
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// ==== Keep-alive server ====
+// Keep-alive cho Render
 const app = express();
-app.get("/", (req, res) => res.send("Bot is alive!"));
-app.listen(3000, () => console.log("🌍 Keep-alive server running on port 3000"));
+app.get("/", (req, res) => res.send("Bot is running!"));
+app.listen(3000, () => console.log("🌐 Keep-alive server running"));
 
-// ==== Items ====
-const items = require("./items.js");
+// Dữ liệu user trang bị
+const equippedItems = new Map();
 
-// ==== Khi bot online ====
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ==== Khi có member mới join ====
+// Auto add role base khi member join
 client.on("guildMemberAdd", async (member) => {
-  const baseRole = member.guild.roles.cache.get(process.env.ROLE_BASE);
+  const baseRole = process.env.BASE_ROLE;
   if (baseRole) {
-    await member.roles.add(baseRole);
-    console.log(`➕ Gán role base cho ${member.user.tag}`);
+    await member.roles.add(baseRole).catch(console.error);
+    console.log(`Added base role to ${member.user.tag}`);
   }
 });
 
-// ==== Khi member được update role (ví dụ lên level 5) ====
+// Khi user nhận role level 5 thì xóa role base
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  const baseRole = newMember.guild.roles.cache.get(process.env.ROLE_BASE);
-  const level5Role = newMember.guild.roles.cache.get(process.env.ROLE_LEVEL5);
+  const level5Role = process.env.LEVEL5_ROLE;
+  const baseRole = process.env.BASE_ROLE;
 
-  if (!baseRole || !level5Role) return;
-
-  // Nếu user có role level 5 thì xóa role base
-  if (!oldMember.roles.cache.has(level5Role.id) && newMember.roles.cache.has(level5Role.id)) {
-    if (newMember.roles.cache.has(baseRole.id)) {
-      await newMember.roles.remove(baseRole);
-      console.log(`🔄 Removed base role from ${newMember.user.tag}`);
+  if (!oldMember.roles.cache.has(level5Role) && newMember.roles.cache.has(level5Role)) {
+    if (newMember.roles.cache.has(baseRole)) {
+      await newMember.roles.remove(baseRole).catch(console.error);
+      console.log(`Removed base role from ${newMember.user.tag}`);
     }
   }
 });
 
-// ==== Command xử lý tin nhắn ====
+// Xử lý command prefix "!"
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  if (message.author.bot || !message.guild) return;
 
-  // !item
-  if (message.content === "!item") {
-    const itemList = Object.keys(items)
-      .map((name) => `🎁 ${name}`)
-      .join("\n");
-    message.reply(itemList || "❌ Không có item nào!");
+  const prefix = "!";
+  if (!message.content.startsWith(prefix)) return;
+
+  const [cmd, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
+
+  // !item → liệt kê item
+  if (cmd === "item") {
+    const list = Object.keys(items).map((name) => `• ${name}`).join("\n");
+    return message.reply(`📦 Danh sách item:\n${list}`);
   }
 
-  // !equip <item name>
-  if (message.content.startsWith("!equip")) {
-    const args = message.content.split(" ").slice(1);
+  // !equip <tên item>
+  if (cmd === "equip") {
     const itemName = args.join(" ");
-    const item = items[itemName];
-
-    if (!item) {
+    if (!items[itemName]) {
       return message.reply("❌ Item không tồn tại.");
     }
 
-    const role = message.guild.roles.cache.get(item.roleId);
-    if (!role) {
-      return message.reply("❌ Role không tồn tại trong server.");
+    const requiredRole = items[itemName].roleId;
+    if (!message.member.roles.cache.has(requiredRole)) {
+      return message.reply("🚫 Bạn không có role cần thiết để dùng item này.");
     }
 
-    await message.member.roles.add(role);
-    message.reply(`✅ Bạn đã trang bị **${itemName}**`);
+    // Trang bị
+    equippedItems.set(message.author.id, itemName);
+    return message.reply(`✅ Bạn đã trang bị **${itemName}** thành công!`);
+  }
+
+  // !myequip → xem item đã trang bị
+  if (cmd === "myequip") {
+    const current = equippedItems.get(message.author.id);
+    if (!current) return message.reply("ℹ️ Bạn chưa trang bị item nào.");
+    return message.reply(`🎖️ Bạn đang trang bị: **${current}**`);
   }
 });
 
-client.login(process.env.TOKEN);
+client.login(process.env.DISCORD_TOKEN);
